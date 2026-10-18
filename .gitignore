@@ -1,0 +1,26 @@
+# Data — large, regenerable, never commit
+data/raw/
+data/features/
+
+# Models — reproducible from the pipeline
+models/.pkl
+
+# Outputs
+outputs/.npz
+outputs/.log
+
+# Python
+__pycache__/
+.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
