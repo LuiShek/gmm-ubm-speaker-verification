@@ -105,6 +105,63 @@ py scripts/make_figures.py       # ~1 min: all ten figures
 
 Every step is idempotent — cached features are reused on re-run.
 
+## Test your own voice
+
+Two commands, one for each thing you asked a speaker verifier to do.
+
+```powershell
+py scripts/voice_cli.py register      # 5 takes of 10 s, prompted
+py scripts/voice_cli.py login         # speak once -> ACCESS GRANTED / DENIED
+```
+
+`register` asks for a username, then prompts `Press Enter for take 1/5`,
+counts 3-2-1, records 10 s, and repeats five times with a 1.5 s gap. Takes
+that are silent or shorter than ~2 s of speech are retaken automatically.
+`login` records one 5 s trial (up to `--attempts` tries) and exits **0** on
+ACCEPT, **2** on REJECT, so it drops straight into a script or a login hook.
+
+Both accept files instead of the microphone when you want to test or automate:
+
+```powershell
+py scripts/voice_cli.py register --user me --audio a.wav b.wav c.wav d.wav e.wav
+py scripts/voice_cli.py login --user me --audio test.wav --json
+```
+
+Microphone capture uses `sounddevice` if installed, otherwise ffmpeg/DirectShow
+(`py scripts/voice_cli.py devices` lists inputs). `pip install -e .[audio]`
+provides the `voiceauth` command as an alternative to the script shim.
+
+### How the accept/reject decision is made
+
+The published 6.597 threshold lives on a z-scale whose cohort standard
+deviation is ~0.1. Reusing it directly **accepted a different voice** in
+testing, because any recording from a new microphone scores dozens of standard
+deviations above that cohort. The gate therefore uses test normalisation:
+
+```
+T = (raw LLR of your model - mean raw LLR of 20 other speakers' models)
+    / standard deviation of those 20
+```
+
+Every score in the numerator and denominator comes from the *same recording*,
+so microphone and channel effects cancel. `calibrate` builds the 20 models and
+measures the threshold on 12 speakers held out of the cohort (~20 min, one off):
+
+| Operating point | Threshold | Measured on |
+|---|---:|---|
+| FAR = 1% (default) | +3.367 T | 1,254 target / 792 impostor trials |
+| EER 2.01% | +2.768 T | same held-out speakers |
+| FAR = 5% | +2.034 T | same held-out speakers |
+
+Re-run `calibrate` after changing features, mixtures or the eval split;
+`selftest` independently confirms the score scale still matches
+`outputs/scores.npz` to <1e-6. Tighter or looser gates: `--threshold`.
+
+**Limits worth stating.** No anti-spoofing: a recording of the target's voice
+passes, and synthetic speech is out of distribution. The 2% EER is measured on
+clean read LibriSpeech with 20 background models — re-measure on your own
+microphone before trusting the rate for anything that matters.
+
 ## Layout
 
 ```

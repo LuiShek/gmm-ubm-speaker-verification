@@ -4,6 +4,10 @@ data/features/
 
 # Models — reproducible from the pipeline
 models/.pkl
+# Per-speaker voice models: biometric data, never commit
+models/speakers/
+# Cohort models are rebuilt by `calibrate`
+models/cohort_models.pkl
 
 # Outputs
 outputs/.npz
