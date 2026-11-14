@@ -115,23 +115,52 @@ def fig_per_speaker(s, y, speakers):
     _save(fig, "03_per_speaker_margin.png")
 
 
-def fig_tnorm_effect(s, y):
-    from sklearn.metrics import roc_curve
-    fig, ax = plt.subplots(figsize=(5, 4.2))
-    fpr, tpr, _ = roc_curve(y, s)
-    ax.loglog(fpr, 1 - tpr, color=C_TGT, lw=1.8, label="with T-norm")
-    # Raw (un-normalised) proxy: re-standardise per model to zero mean / unit
-    # variance, which is what T-norm removes.
-    mu, sd = s.mean(), s.std() + 1e-10
-    fpr2, tpr2, _ = roc_curve(y, (s - mu) / sd)
-    ax.loglog(fpr2, 1 - tpr2, color="gray", lw=1.2, ls="--", label="global-normalised")
-    ax.loglog([1e-4, 1], [1e-4, 1], "k:", lw=0.8)
-    ax.set_xlabel("False Accept Rate")
-    ax.set_ylabel("False Reject Rate")
-    ax.set_title("Effect of score normalisation")
-    ax.set_xlim(1e-4, 1)
-    ax.set_ylim(1e-4, 1)
-    ax.legend(fontsize=8)
+def fig_tnorm_effect():
+    """EER with and without T-norm, per system, from scripts/baselines.py.
+
+    The previous version re-standardised already-normalised scores globally and
+    plotted two ROCs - but ROC is invariant to monotone transforms, so the two
+    curves were identical by construction. This version reads measured EERs.
+    """
+    import json
+
+    p = config.OUTPUTS / "baselines.json"
+    if not p.exists():
+        print("  skipping 04: run scripts/baselines.py first", flush=True)
+        return
+    obj = json.loads(p.read_text(encoding="utf-8"))
+    rows = obj.get("systems", [])
+    systems: list[str] = []
+    for r in rows:
+        if r["system"] not in systems:
+            systems.append(r["system"])
+    if not systems:
+        return
+
+    short = {"cosine (mean cepstra)": "cosine",
+             "decoupled GMM (no UBM)": "decoupled\nGMM",
+             "GMM-UBM (project)": "GMM-UBM"}
+    labels = [short.get(s, s) for s in systems]
+    variants = [("raw", "raw score", "#888888"),
+                ("tnorm-1spk", "T-norm, 1-speaker cohort", "#c0392b"),
+                ("tnorm-cohort", "T-norm, per-speaker cohort", C_TGT)]
+
+    x = np.arange(len(systems))
+    w = 0.26
+    fig, ax = plt.subplots(figsize=(6.4, 3.6))
+    for i, (key, label, colour) in enumerate(variants):
+        vals = [next((r["eer"] * 100 for r in rows
+                      if r["system"] == s and r.get("norm") == key), np.nan)
+                for s in systems]
+        off = (i - 1) * w
+        bars = ax.bar(x + off, vals, w, label=label, color=colour)
+        ax.bar_label(bars, fmt="%.1f", fontsize=6.5, padding=2)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("EER (%)")
+    ax.set_ylim(0, float(np.nanmax([r["eer"] for r in rows])) * 125)
+    ax.set_title("Score normalisation, measured per system")
+    ax.legend(fontsize=7.5, frameon=False, ncol=3, loc="upper left")
     _save(fig, "04_normalisation_effect.png")
 
 
@@ -263,7 +292,7 @@ def main() -> int:
     fig_det(s, y)
     fig_scores(s, y)
     fig_per_speaker(s, y, speakers)
-    fig_tnorm_effect(s, y)
+    fig_tnorm_effect()
     fig_min_dcf(s, y)
     fig_mel()
     fig_mfcc()

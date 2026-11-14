@@ -1,0 +1,67 @@
+{
+  "trials": 13315,
+  "targets": 5315,
+  "impostors": 8000,
+  "cohort_built_speakers": [
+    "4267"
+  ],
+  "impostor_cap": 8000,
+  "seed": 1234,
+  "systems": [
+    {
+      "system": "cosine (mean cepstra)",
+      "norm": "raw",
+      "eer": 0.08035683207902163,
+      "min_dcf": 0.568383466603951
+    },
+    {
+      "system": "cosine (mean cepstra)",
+      "norm": "tnorm-1spk",
+      "eer": 0.17852563499529633,
+      "min_dcf": 0.9384760112888053
+    },
+    {
+      "system": "cosine (mean cepstra)",
+      "norm": "tnorm-cohort",
+      "eer": 0.07278139698965191,
+      "min_dcf": 0.8663304327375353
+    },
+    {
+      "system": "decoupled GMM (no UBM)",
+      "norm": "raw",
+      "eer": 0.11679456726246473,
+      "min_dcf": 0.9843838193791157
+    },
+    {
+      "system": "decoupled GMM (no UBM)",
+      "norm": "tnorm-1spk",
+      "eer": 0.16011894402634053,
+      "min_dcf": 1.0
+    },
+    {
+      "system": "decoupled GMM (no UBM)",
+      "norm": "tnorm-cohort",
+      "eer": 0.12264834195672625,
+      "min_dcf": 0.9823142050799623
+    },
+    {
+      "system": "GMM-UBM (project)",
+      "norm": "raw",
+      "eer": 0.014493650047036698,
+      "min_dcf": 0.3803142050799624
+    },
+    {
+      "system": "GMM-UBM (project)",
+      "norm": "tnorm-1spk",
+      "eer": 0.05415563264346192,
+      "min_dcf": 0.7201578080903105
+    },
+    {
+      "system": "GMM-UBM (project)",
+      "norm": "tnorm-cohort",
+      "eer": 0.009766815616180629,
+      "min_dcf": 0.21860124647224838
+    }
+  ],
+  "created": "2026-11-14T11:22:30"
+}

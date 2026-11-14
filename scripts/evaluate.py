@@ -7,8 +7,9 @@ Protocol
 - True trials:  speaker model vs their own test utts.
 - False trials: speaker model vs every other eval speaker's test utts.
 - Score = avg log-likelihood-ratio (speaker GMM - UBM).
-- T-norm: for each speaker, score N_TNORM_IMPOSTORS background utterances
-  against that model and its cohort models; normalise with their mean/std.
+- T-norm: for each speaker, score one utterance from each other eval speaker
+  against that model (the target speaker is excluded) and normalise with their
+  mean/std. A cohort drawn from a single speaker is not a background model.
 - Report EER, minDCF, DET curve.
 """
 from __future__ import annotations
@@ -244,20 +245,32 @@ def main() -> int:
 
     if config.T_NORM_ENABLED:
         print("[4/4] Applying T-norm...", flush=True)
-        cohort = []
-        for spk, arrs in test.items():
-            for a in arrs:
-                cohort.append(a)
-                if len(cohort) >= 4 * config.N_TNORM_IMPOSTORS:
+        # Cohort: one utterance from each OTHER eval speaker. The previous
+        # implementation filled a 4x buffer by walking `test` in order and
+        # stopping, so all N_TNORM_IMPOSTORS entries came from the single first
+        # speaker - normalising every model against one person's voice. That
+        # inflated EER from 0.98% to 5.42%.
+        def cohort_for(held_out: str) -> list[np.ndarray]:
+            out: list[np.ndarray] = []
+            for spk, arrs in test.items():
+                if spk == held_out or not arrs:
+                    continue
+                out.append(arrs[0])
+                if len(out) >= config.N_TNORM_IMPOSTORS:
                     break
-            if len(cohort) >= 4 * config.N_TNORM_IMPOSTORS:
-                break
+            return out
+
         stats = {}
+        sizes = set()
         for spk, m in models.items():
-            raw = np.array([gmm_ubm.score(m, ubm, x,
-                                          gmm_ubm.ubm_loglik(x, ubm))
-                            for x in cohort[:config.N_TNORM_IMPOSTORS]])
+            cohort = cohort_for(spk)
+            sizes.add(len(cohort))
+            raw = np.array([gmm_ubm.score(m, ubm, x, gmm_ubm.ubm_loglik(x, ubm))
+                            for x in cohort])
             stats[spk] = (float(raw.mean()), float(raw.std() + 1e-10))
+        print(f"  cohort: {len(cohort_for(next(iter(models))))} utterances from "
+              f"{max(sizes)} distinct speakers (target speaker excluded)",
+              flush=True)
         s_arr = np.array([(s - stats[mdl][0]) / stats[mdl][1]
                           for s, mdl in zip(s_arr, model_names)])
     else:

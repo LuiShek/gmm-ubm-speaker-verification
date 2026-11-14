@@ -11,9 +11,9 @@ question: **is this the same speaker?**
 
 | Metric | Value |
 |---|---|
-| **EER** | **5.42%** (95% CI 3.32–7.68%) |
-| **minDCF** (p=0.01, normalised) | **0.720** |
-| **AUC** | **0.975** |
+| **EER** | **0.98%** (95% CI 0.58–1.26%) |
+| **minDCF** (p=0.01, normalised) | **0.219** |
+| **AUC** | **0.999** |
 | Trials | 5,315 target / 8,000 impostor |
 | Speakers | 50 (held out from UBM training) |
 | Conditions | Clean read speech, channel-matched |
@@ -22,19 +22,34 @@ Confidence interval from 1,000 **speaker-clustered** bootstrap resamples —
 resampling speakers, not individual trials, because trials sharing a speaker
 are correlated.
 
+### Correction: the earlier 5.42% was wrong
+
+The previously published EER was 5.42%. That number came from a broken T-norm
+cohort: `evaluate.py` filled a buffer in dictionary order and stopped, so all
+50 cohort utterances came from **one speaker**. Every model was normalised
+against a single voice.
+
+| Cohort | EER | minDCF |
+|---|---:|---:|
+| none (raw LLR) | 1.45% | 0.380 |
+| 50 utterances from one speaker (old) | 5.42% | 0.720 |
+| one utterance per other speaker (fixed) | **0.98%** | **0.219** |
+
+The bug was conservative — it understated the system by 5× and hid the fact
+that normalisation works. All three rows are reproducible with
+`py scripts/baselines.py`, so the old figure stays auditable. Any report
+quoting 5.42% should be read as quoting the broken cohort.
+
 ### Read this before quoting the number
 
-**5.42% is per single utterance.** An earlier run of this project reported
-0.43%; that figure averaged three test utterances per trial, which is an
-ensemble and cancels per-utterance variance. It is not comparable and is not
-the headline. The contrast is itself the finding: score averaging across three
-recordings buys roughly an order of magnitude in EER, which tells you how much
-of the remaining error is utterance-level noise rather than speaker confusion.
+**0.98% is per single utterance.** An earlier version averaged three test
+utterances per trial and reported 0.43%; that figure used the same broken
+cohort and is withdrawn rather than restated.
 
 **The channel-matched caveat matters more than the EER.** LibriSpeech is clean
 read audiobook speech, all recorded with similar equipment. Classic GMM-UBM
 degrades sharply under handset or far-field mismatch — published evaluations
-on telephone data show several times this error rate. Do not carry 5.42% to a
+on telephone data show several times this error rate. Do not carry 0.98% to a
 real deployment without re-measuring on your own audio.
 
 ## Figures
@@ -84,6 +99,33 @@ configuration are listed honestly:
 | Normalisation | handset-dependent | T-norm | no handset labels in LibriSpeech |
 | Adaptation | means only, r=16 | same | — |
 | Features | mel-cepstrum + deltas | same | — |
+
+## What each component buys
+
+`scripts/baselines.py` scores three systems on the same 13,315 trials — same
+split, same target trials, same impostor subsample, same seed — and reports
+each under three scoring rules (`~13 min`, `--fast` skips the last system):
+
+| System | Raw score | T-norm, 1-speaker cohort | T-norm, per-speaker cohort |
+|---|---:|---:|---:|
+| Cosine on mean cepstra | 8.04% | 17.85% | 7.28% |
+| Decoupled GMM, no UBM (32 mixtures) | 11.68% | 16.01% | 12.26% |
+| **GMM-UBM (this project)** | **1.45%** | 5.42% | **0.98%** |
+
+Three results worth stating out loud:
+
+1. **The UBM earns its keep.** A per-speaker GMM trained from scratch on five
+   utterances is 10 EER points worse than the same data MAP-adapted from a
+   background model (11.68% → 1.45%). This is the claim the methodology doc
+   makes; here it is measured on identical trials.
+2. **Cosine is a strong, cheap baseline.** Mean-cepstrum cosine similarity
+   reaches 7.28%, so the classical pipeline's margin over "no model at all" is
+   real but not enormous. Worth knowing before claiming the apparatus is
+   necessary.
+3. **Normalisation is not free, and a bad cohort is worse than none.** The
+   single-speaker cohort (see below) *adds* four EER points to the system it is
+   meant to help. With one utterance per other speaker, T-norm takes 1.45% down
+   to 0.98%.
 
 ## Install
 
@@ -183,25 +225,33 @@ provides the `voiceauth` command as an alternative to the script shim.
 
 ### How the accept/reject decision is made
 
-The published 6.597 threshold lives on a z-scale whose cohort standard
-deviation is ~0.1. Reusing it directly **accepted a different voice** in
-testing, because any recording from a new microphone scores dozens of standard
-deviations above that cohort. The gate therefore uses test normalisation:
+The evaluation threshold is not the gate threshold. The pipeline normalises
+each trial against *other speakers' utterances*, which fixes the evaluation
+number but cannot be reused live: on a new microphone the whole score scale
+moves. The gate therefore normalises each trial against 20 other speaker
+**models scored on that same recording**:
 
 ```
 T = (raw LLR of your model - mean raw LLR of 20 other speakers' models)
     / standard deviation of those 20
 ```
 
-Every score in the numerator and denominator comes from the *same recording*,
-so microphone and channel effects cancel. `calibrate` builds the 20 models and
-measures the threshold on 12 speakers held out of the cohort (~20 min, one off):
+The channel effect appears in numerator and denominator, so it cancels rather
+than needing to be modelled. (The old evaluation cohort had a standard
+deviation of ~0.1 — because its 50 utterances came from one speaker — which is
+why z-scores on that scale exploded for any new microphone.) `calibrate` builds
+the 20 models and measures the threshold on 12 speakers held out of the cohort
+(~20 min, one off):
 
 | Operating point | Threshold | Measured on |
 |---|---:|---|
 | FAR = 1% (default) | +3.367 T | 1,254 target / 792 impostor trials |
 | EER 2.01% | +2.768 T | same held-out speakers |
 | FAR = 5% | +2.034 T | same held-out speakers |
+
+These numbers are **not** comparable to the 0.98% evaluation EER: the cohort
+here is other speakers' *models* scored on the live recording, not other
+speakers' utterances, and the audio comes from a different microphone chain.
 
 Re-run `calibrate` after changing features, mixtures or the eval split;
 `selftest` independently confirms the score scale still matches
@@ -249,6 +299,16 @@ voice_auth/
   verifier, not a liveness detector.
 - **T-norm cohort overlaps eval data.** The cohort is drawn from test
   utterances, which is mildly optimistic. A disjoint cohort would be stricter.
+- **The shipped gate threshold is not calibrated on your microphone.** The
+  headline 0.98% and the `+3.367 T` default were measured on LibriSpeech. A
+  laptop microphone is a different channel, so the operating point must be
+  re-measured with `calibrate-user` before the gate is trusted for anything.
+- **A close relative is the hard impostor.** Two distinct synthetic voices
+  separated cleanly (genuine T +13.6..+16.2, impostor T +2.08..+2.40), but
+  there is no guarantee for a sibling with similar vocal tract length and
+  accent: if the two score distributions overlap, no threshold separates them.
+  `calibrate-user` reports that case as **NO SEPARATING THRESHOLD** instead of
+  pretending otherwise.
 
 ## License
 

@@ -1,10 +1,10 @@
-EER=5.416%
-EER_CI_LOW=3.319%
-EER_CI_HIGH=7.685%
+EER=0.977%
+EER_CI_LOW=0.581%
+EER_CI_HIGH=1.261%
 bootstrap_iters=1000
 FAR_at_FRR0=0.000%
-minDCF=0.72016
-threshold=+6.59692
+minDCF=0.21860
+threshold=+2.83393
 targets=5315
 impostors=8000
 t_norm=True

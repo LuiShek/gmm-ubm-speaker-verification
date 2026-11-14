@@ -83,6 +83,39 @@ def test_trial_t_score_ranks_the_right_speaker_first():
     assert own["t"] > other["t"]
 
 
+def test_baseline_cohort_spans_speakers_and_excludes_target():
+    """The T-norm cohort must not be a block from one speaker."""
+    sys.path.insert(0, str(config.ROOT / "scripts"))
+    from baselines import cohort_by_speaker
+
+    test = {f"spk{i}": [np.zeros((30, config.FEAT_DIM)) + i for _ in range(5)]
+            for i in range(6)}
+    coh = cohort_by_speaker(test, exclude="spk0", n=10)
+    assert len(coh) == 5                      # one per other speaker only
+    for x in coh:
+        assert float(x[0, 0]) != 0.0          # spk0's zeros never appear
+    assert len({float(x[0, 0]) for x in coh}) == 5
+
+
+def test_baselines_agree_with_published_eer():
+    """scripts/baselines.py must not contradict outputs/report.txt."""
+    p = config.OUTPUTS / "baselines.json"
+    r = config.OUTPUTS / "report.txt"
+    if not p.exists() or not r.exists():
+        return
+    obj = json.loads(p.read_text(encoding="utf-8"))
+    kv = dict(line.split("=", 1) for line in
+              r.read_text(encoding="utf-8").splitlines() if "=" in line)
+    pub = float(kv["EER"].rstrip("%")) / 100.0
+    row = [s for s in obj.get("systems", [])
+           if str(s.get("system", "")).startswith("GMM-UBM")
+           and s.get("norm") == "T-norm"]
+    if not row:
+        return
+    assert abs(row[0]["eer"] - pub) < 2e-3, (
+        f"baselines say {row[0]['eer']:.4f}, report.txt says {pub:.4f}")
+
+
 def test_parser_exposes_expected_commands():
     p = cli.build_parser()
     for cmd in ("register", "login", "record", "enroll", "verify", "list",

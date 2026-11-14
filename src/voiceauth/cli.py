@@ -2,7 +2,7 @@
 Command-line interface: enroll your own voice, then verify a recording.
 
 The scoring path must land on exactly the same scale as the published
-evaluation (threshold +6.597 in outputs/report.txt), otherwise a stored
+evaluation (threshold +2.83393 in outputs/report.txt), otherwise a stored
 threshold means nothing. This module therefore rebuilds the evaluation
 split and the T-norm cohort with the same seed and iteration order as
 scripts/evaluate.py, and `selftest` checks the reproduced scores against
@@ -48,8 +48,10 @@ SPEAKER_DIR = config.MODELS / "speakers"
 CALIBRATION = config.MODELS / "calibration.json"
 COHORT_PATH = config.MODELS / "cohort_models.pkl"
 
-# The published EER threshold lives in T-norm units (outputs/report.txt).
-PUBLISHED_TNORM_THRESHOLD = 6.59692
+# The published EER threshold lives in T-norm units (outputs/report.txt). This
+# is a fallback for checkouts without outputs/; tests/test_cli.py asserts it
+# matches the report so it cannot drift silently.
+PUBLISHED_TNORM_THRESHOLD = 2.83393
 
 # Decisions use a TEST-normalised score (T = (raw - mu_cohort) / sd_cohort),
 # where the cohort is a set of other speakers' models scored on the SAME trial.
@@ -232,16 +234,23 @@ def reproduce_eval_split() -> tuple[dict[str, list[np.ndarray]], dict[str, list[
     return enroll, test
 
 
-def tnorm_cohort(test: dict[str, list[np.ndarray]]) -> list[np.ndarray]:
-    """First 4 x N_TNORM impostor utterances, in evaluate.py's order."""
-    target = 4 * config.N_TNORM_IMPOSTORS
-    cohort: list[np.ndarray] = []
-    for arrs in test.values():
-        for a in arrs:
-            cohort.append(a)
-            if len(cohort) >= target:
-                return cohort
-    return cohort
+def tnorm_cohort(test: dict[str, list[np.ndarray]],
+                 exclude: str | None = None) -> list[np.ndarray]:
+    """One utterance from each speaker other than `exclude`.
+
+    Matches scripts/evaluate.py. The previous version took a block of
+    utterances in dict order, which meant the cohort came from a single
+    speaker: every model was normalised against one person's voice, and EER
+    went from 0.98% to 5.42%.
+    """
+    out: list[np.ndarray] = []
+    for spk, arrs in test.items():
+        if spk == exclude or not arrs:
+            continue
+        out.append(arrs[0])
+        if len(out) >= config.N_TNORM_IMPOSTORS:
+            break
+    return out
 
 
 def cohort_raw_scores(model: dict, ubm: dict,
@@ -821,13 +830,12 @@ def cmd_selftest(args) -> int:
 
     ubm = load_ubm()
     enroll, test = reproduce_eval_split()
-    cohort = tnorm_cohort(test)
 
     ok = True
     print(f"{'speaker':8} {'utts':>4} {'max|diff|':>11}  result")
     for name in list(test.keys())[: args.speakers]:
         model = gmm_ubm.map_adapt(ubm, enroll[name])
-        stats = tnorm_stats(model, ubm, cohort)
+        stats = tnorm_stats(model, ubm, tnorm_cohort(test, exclude=name))
         mine = np.array([normalise(gmm_ubm.score(model, ubm, x), stats)
                          for x in test[name]])
 
