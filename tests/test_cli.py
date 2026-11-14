@@ -85,6 +85,89 @@ def test_trial_t_score_ranks_the_right_speaker_first():
 
 def test_parser_exposes_expected_commands():
     p = cli.build_parser()
-    for cmd in ("register", "login", "enroll", "verify", "list", "delete",
-                "selftest", "calibrate", "devices"):
+    for cmd in ("register", "login", "record", "enroll", "verify", "list",
+                "delete", "selftest", "calibrate", "calibrate-user", "devices"):
         assert cmd in p._subparsers._group_actions[0].choices
+
+
+def test_login_pools_requested_takes_into_one_trial(monkeypatch):
+    """--takes N must concatenate N captures and score exactly one trial."""
+    from types import SimpleNamespace
+
+    frames = np.zeros((120, config.FEAT_DIM), dtype=np.float32)
+    seen: list[int] = []
+
+    monkeypatch.setattr(cli, "load_speaker",
+                        lambda name: {"name": name, "created": "2026-01-01"})
+    monkeypatch.setattr(cli, "_countdown", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_capture_take",
+                        lambda label, secs, dev, attempts=3: frames.copy())
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+    monkeypatch.setattr(cli, "print_trial", lambda spk, r: None)
+
+    def fake_score(spk, X):
+        seen.append(int(X.shape[0]))
+        return {"accept": True}
+
+    monkeypatch.setattr(cli, "score_trial", fake_score)
+
+    args = SimpleNamespace(user="me", audio=None, takes=3, attempts=2,
+                           seconds=1.0, device=None, json=False)
+    assert cli.cmd_login(args) == 0
+    assert seen == [360]        # three 120-frame captures, one decision
+
+
+def test_login_denies_after_all_attempts(monkeypatch):
+    from types import SimpleNamespace
+
+    frames = np.zeros((120, config.FEAT_DIM), dtype=np.float32)
+    decisions: list[int] = []
+
+    monkeypatch.setattr(cli, "load_speaker",
+                        lambda name: {"name": name, "created": "2026-01-01"})
+    monkeypatch.setattr(cli, "_countdown", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_capture_take",
+                        lambda label, secs, dev, attempts=3: frames.copy())
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+    monkeypatch.setattr(cli, "print_trial", lambda spk, r: None)
+
+    def reject(spk, X):
+        decisions.append(1)
+        return {"accept": False}
+
+    monkeypatch.setattr(cli, "score_trial", reject)
+
+    args = SimpleNamespace(user="me", audio=None, takes=1, attempts=3,
+                           seconds=1.0, device=None, json=False)
+    assert cli.cmd_login(args) == 2
+    assert len(decisions) == 3
+
+
+def test_record_parser_requires_an_output_path():
+    p = cli.build_parser()
+    try:
+        p.parse_args(["record"])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("record without --out should be a usage error")
+    a = p.parse_args(["record", "--out", "take.wav", "--seconds", "6"])
+    assert a.out == "take.wav" and a.seconds == 6.0
+
+
+def test_choose_threshold_splits_separable_scores():
+    thr, margin = cli._choose_threshold([5.0, 6.0], [1.0, 2.0])
+    assert thr == 3.5           # midpoint of worst genuine and best impostor
+    assert margin == 3.0
+
+
+def test_choose_threshold_refuses_overlapping_scores():
+    # impostor matches the genuine user: no threshold can separate them
+    thr, margin = cli._choose_threshold([4.0, 5.0], [4.5, 7.0])
+    assert thr is None
+    assert margin < 0
+
+
+def test_choose_threshold_needs_both_sides():
+    assert cli._choose_threshold([], [1.0])[0] is None
+    assert cli._choose_threshold([1.0], [])[0] is None

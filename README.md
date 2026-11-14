@@ -119,6 +119,9 @@ counts 3-2-1, records 10 s, and repeats five times with a 1.5 s gap. Takes
 that are silent or shorter than ~2 s of speech are retaken automatically.
 `login` records one 5 s trial (up to `--attempts` tries) and exits **0** on
 ACCEPT, **2** on REJECT, so it drops straight into a script or a login hook.
+Pass `--takes 3` to pool three recordings into one decision: a single 5 s
+trial is high-variance, and pooling narrows the score distribution on both the
+genuine and impostor side.
 
 Both accept files instead of the microphone when you want to test or automate:
 
@@ -126,6 +129,53 @@ Both accept files instead of the microphone when you want to test or automate:
 py scripts/voice_cli.py register --user me --audio a.wav b.wav c.wav d.wav e.wav
 py scripts/voice_cli.py login --user me --audio test.wav --json
 ```
+
+### Calibrating one user against a real impostor
+
+The global threshold is measured on LibriSpeech audiobook speech. If somebody
+who knows you tries to imitate you on your own microphone — a sibling is the
+hard case — that threshold may not be the right operating point for *your*
+voice. Measure it directly instead:
+
+```powershell
+py scripts/voice_cli.py calibrate-user --user me \
+  --genuine me1.wav me2.wav me3.wav \
+  --impostor brother1.wav brother2.wav \
+  --dry-run
+```
+
+Need files? `record` saves a take instead of throwing it away, with the same
+silence and length checks:
+
+```powershell
+py scripts/voice_cli.py record --out me1.wav --seconds 8     # repeat 3x
+py scripts/voice_cli.py record --out brother1.wav --seconds 8
+```
+
+Record both speakers on the **same microphone, same distance, same room** —
+otherwise you are measuring the channel, not the voices.
+
+It scores every file, prints the two distributions, and sets the threshold to
+the midpoint between the **worst genuine** and **best impostor** score:
+
+```
+  genuine : min +13.604  max +16.214   (n=3)
+  impostor: min +2.080   max +2.401    (n=2)
+  margin  : +11.203 T
+  dry run: threshold would be +8.002 T
+```
+
+Drop `--dry-run` to write it. If the margin is **negative** — the impostor
+scored as high as you — it prints **NO SEPARATING THRESHOLD** and exits **1**
+without changing anything: no threshold can separate overlapping
+distributions, so a stricter gate would reject you too. In that case collect
+more enrollment audio, use `--takes` at login, or move to a stronger model;
+do not deploy the gate. `--set-threshold` overrides the computed midpoint when
+you want an explicit value.
+
+Small samples are fragile: `n` of 3+2 tells you about those recordings, not
+about the next attempt. Keep the files and re-run after changing microphone,
+distance or speaking style.
 
 Microphone capture uses `sounddevice` if installed, otherwise ffmpeg/DirectShow
 (`py scripts/voice_cli.py devices` lists inputs). `pip install -e .[audio]`

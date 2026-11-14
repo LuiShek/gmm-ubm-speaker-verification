@@ -20,6 +20,8 @@ Usage
 -----
   py scripts/voice_cli.py register            # 5 takes of 10 s, then a model
   py scripts/voice_cli.py login               # speak once -> ACCESS GRANTED/DENIED
+  py scripts/voice_cli.py login --takes 3     # pool 3 takes into one decision
+  py scripts/voice_cli.py calibrate-user --user me --genuine ... --impostor ...
   py scripts/voice_cli.py selftest            # prove the score scale matches eval
 
 Run `py scripts/voice_cli.py <command> -h` for the rest.
@@ -533,16 +535,28 @@ def cmd_login(args) -> int:
             print(json.dumps({"user": name, **r}, indent=2))
         return 0 if r["accept"] else 2
 
+    takes = max(1, args.takes)
     attempts = max(1, args.attempts)
     for attempt in range(1, attempts + 1):
-        input(f"  Press Enter to speak for {args.seconds:g}s "
-              f"(attempt {attempt}/{attempts}) ... ")
-        _countdown()
-        try:
-            X = _capture_take("login", args.seconds, args.device, attempts=1)
-        except SystemExit as e:
-            print(f"  {e}")
+        captured: list[np.ndarray] = []
+        for take in range(1, takes + 1):
+            label = "login" if takes == 1 else f"login take {take}/{takes}"
+            input(f"  Press Enter to speak for {args.seconds:g}s "
+                  f"({label}, attempt {attempt}/{attempts}) ... ")
+            _countdown()
+            try:
+                captured.append(_capture_take(label, args.seconds, args.device,
+                                              attempts=1))
+            except SystemExit as e:
+                print(f"  {e}")
+                captured = []
+                break
+        if not captured:
             continue
+        # Pooling takes averages out phonetic and channel luck: one 5 s trial
+        # is high-variance, and a sibling's best draw can outscore a genuine
+        # user's worst. Pooled scoring narrows both distributions.
+        X = np.concatenate(captured, axis=0) if len(captured) > 1 else captured[0]
 
         r = score_trial(spk, X)
         print_trial(spk, r)
@@ -553,6 +567,28 @@ def cmd_login(args) -> int:
         if attempt < attempts:
             print("  try again\n")
     return 2
+
+
+def cmd_record(args) -> int:
+    """Record one take to a WAV file, so trials can be kept and re-scored."""
+    out = Path(args.out)
+    if out.suffix.lower() != ".wav":
+        out = out.with_suffix(".wav")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    y = record_audio(args.seconds, args.device)
+    features_from_audio(out.name, y, args.seconds)  # same silence/VAD gates
+    sf.write(str(out), y, config.SR, subtype="PCM_16")
+
+    dur = len(y) / config.SR
+    peak = float(np.max(np.abs(y))) if y.size else 0.0
+    print(f"  saved {out}  ({dur:.1f}s, {config.SR} Hz mono, peak {peak:.2f})")
+    print("  keep this file: it is the only record of that take, and "
+          "calibrate-user needs it")
+    if args.json:
+        print(json.dumps({"path": str(out), "seconds": round(dur, 3),
+                          "sample_rate": config.SR, "peak": peak}, indent=2))
+    return 0
 
 
 def cmd_list(args) -> int:
@@ -679,6 +715,101 @@ def cmd_calibrate(args) -> int:
     return 0
 
 
+def _choose_threshold(genuine: list[float], impostor: list[float]) -> tuple[float | None, float]:
+    """Midpoint between the worst genuine and best impostor T-scores.
+
+    Returns (threshold or None, margin). A non-positive margin means the two
+    distributions overlap and NO threshold can separate them - the caller must
+    say so rather than invent one.
+    """
+    if not genuine or not impostor:
+        return None, float("nan")
+    lo_g, hi_i = min(genuine), max(impostor)
+    margin = lo_g - hi_i
+    if margin <= 0:
+        return None, margin
+    return (lo_g + hi_i) / 2.0, margin
+
+
+def cmd_calibrate_user(args) -> int:
+    """Set one user's threshold from their own recordings plus impostor takes."""
+    name = args.user or _ask("username")
+    if not name:
+        raise SystemExit("error: a username is required")
+    spk = load_speaker(name)
+
+    if not args.genuine or not args.impostor:
+        raise SystemExit(
+            "error: need both --genuine (the real user) and --impostor (someone\n"
+            "else, recorded on the same microphone). Example:\n"
+            "  voiceauth calibrate-user --user me \\\n"
+            "    --genuine g1.wav g2.wav g3.wav --impostor brother1.wav brother2.wav"
+        )
+
+    ubm = load_ubm()
+    cohort = load_cohort_models()
+
+    def scores(paths: list[str]) -> list[float]:
+        out = []
+        for p in paths:
+            path = Path(p)
+            if not path.exists():
+                raise SystemExit(f"error: no such file: {path}")
+            y, secs, sr = load_audio(path)
+            X = features_from_audio(f"{path.name} ({sr} Hz)", y, secs)
+            out.append(trial_t_score(spk["model"], X, ubm, cohort)["t"])
+        return out
+
+    print("scoring genuine recordings (must be accepted) ...", flush=True)
+    g = scores(args.genuine)
+    print("scoring impostor recordings (must be rejected) ...", flush=True)
+    i = scores(args.impostor)
+
+    print()
+    print(f"{'genuine':>10}  T")
+    for p, t in zip(args.genuine, g):
+        print(f"{Path(p).name[:10]:>10}  {t:+.3f}")
+    print(f"{'impostor':>10}  T")
+    for p, t in zip(args.impostor, i):
+        print(f"{Path(p).name[:10]:>10}  {t:+.3f}")
+
+    thr, margin = _choose_threshold(g, i)
+    print()
+    print(f"  genuine : min {min(g):+.3f}  max {max(g):+.3f}   (n={len(g)})")
+    print(f"  impostor: min {min(i):+.3f}  max {max(i):+.3f}   (n={len(i)})")
+    print(f"  margin  : {margin:+.3f} T")
+
+    if thr is None:
+        print("\n  NO SEPARATING THRESHOLD: the impostor scores as high as the "
+              "genuine user.\n  A stricter threshold would reject you too. "
+              "More enrollment audio, pooling several\n  login takes, or a "
+              "stronger model (more mixtures/PCA) is needed - do not deploy\n  "
+              "this as a gate until the margin is positive.", file=sys.stderr)
+        return 1
+
+    if args.set_threshold is not None:
+        thr = float(args.set_threshold)
+        source = "user calibration (manual threshold)"
+    else:
+        source = f"user calibration: {len(g)} genuine / {len(i)} impostor"
+
+    if not args.dry_run:
+        spk["threshold"] = float(thr)
+        spk["threshold_source"] = source
+        spk["threshold_space"] = "tnorm"
+        spk["calibrated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        gmm_ubm.save(speaker_path(name), spk)
+        print(f"\n  threshold set to {thr:+.3f} T  ({source})")
+        print(f"  written: {speaker_path(name)}")
+    else:
+        print(f"\n  dry run: threshold would be {thr:+.3f} T ({source})")
+
+    print(f"  caveat  : n={len(g)}+{len(i)} is a tiny sample; scores drift with "
+          "microphone, distance and\n            speaking rate. Re-run after "
+          "moving the mic, and keep the recordings.")
+    return 0
+
+
 def cmd_selftest(args) -> int:
     """Recompute published eval scores; they must match outputs/scores.npz."""
     z_path = config.OUTPUTS / "scores.npz"
@@ -777,7 +908,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="check whether a recording matches a registered user")
     sp.add_argument("--user", help="username (prompted if omitted)")
     sp.add_argument("--seconds", type=float, default=5.0,
-                    help="trial length in seconds (default 5)")
+                    help="length of each take in seconds (default 5)")
+    sp.add_argument("--takes", type=int, default=1,
+                    help="recordings pooled into one trial (default 1; 3 lowers variance)")
     sp.add_argument("--attempts", type=int, default=3,
                     help="how many tries before denying (default 3)")
     sp.add_argument("--device", default=None)
@@ -804,6 +937,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_verify)
 
+    sp = sub.add_parser("record",
+                        help="record a take to a WAV file you keep")
+    sp.add_argument("--out", required=True, metavar="FILE",
+                    help="output .wav path")
+    sp.add_argument("--seconds", type=float, default=8.0,
+                    help="recording length in seconds (default 8)")
+    sp.add_argument("--device", default=None,
+                    help="sounddevice input name or index (see 'devices')")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_record)
+
     sp = sub.add_parser("list", help="list enrolled speakers")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_list)
@@ -827,6 +971,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--impostors", type=int, default=6,
                     help="impostor utterances per held-out pair (default 6)")
     sp.set_defaults(func=cmd_calibrate)
+
+    sp = sub.add_parser(
+        "calibrate-user",
+        help="set one user's threshold from their recordings plus impostors")
+    sp.add_argument("--user", help="username (prompted if omitted)")
+    sp.add_argument("--genuine", nargs="+", metavar="FILE",
+                    help="recordings of the real user (same microphone)")
+    sp.add_argument("--impostor", nargs="+", metavar="FILE",
+                    help="recordings of someone else trying to pass as them")
+    sp.add_argument("--set-threshold", type=float, default=None,
+                    help="force this T threshold instead of the computed midpoint")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="report the scores and threshold without writing")
+    sp.set_defaults(func=cmd_calibrate_user)
 
     sp = sub.add_parser("devices", help="list audio input devices")
     sp.set_defaults(func=cmd_devices)
