@@ -2,16 +2,15 @@
 data/raw/
 data/features/
 
-# Models — reproducible from the pipeline
-models/.pkl
+# Models — ubm.pkl and speaker_split.pkl are committed so the test suite and
+# `selftest` run without downloading the dataset. Regenerated artifacts are not.
 # Per-speaker voice models: biometric data, never commit
 models/speakers/
 # Cohort models are rebuilt by `calibrate`
 models/cohort_models.pkl
 
-# Outputs
-outputs/.npz
-outputs/.log
+# Outputs — scalar artifacts stay committed (the tests read them); run logs do not
+outputs/*.log
 
 # Python
 __pycache__/

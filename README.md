@@ -1,8 +1,19 @@
-# Voice Authentication
+# GMM-UBM Speaker Verification
+
+[![Tests](https://github.com/LuiShek/gmm-ubm-speaker-verification/actions/workflows/tests.yml/badge.svg)](https://github.com/LuiShek/gmm-ubm-speaker-verification/actions/workflows/tests.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![NumPy](https://img.shields.io/badge/NumPy-2.0%2B-013243.svg?logo=numpy&logoColor=white)](https://numpy.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Text-independent speaker verification using a Gaussian mixture model with a
 universal background model (GMM-UBM), per-speaker Bayesian adaptation, and
 score normalisation.
+
+> [!NOTE]
+> An earlier version of this repository advertised **5.42% EER**. That figure was
+> produced by a broken normalisation cohort and is withdrawn — see
+> [Correction](#correction-the-earlier-542-was-wrong) for the bug, the measured
+> effect, and the replacement number.
 
 Given an enrollment recording and a test recording, the system answers one
 question: **is this the same speaker?**
@@ -133,7 +144,18 @@ Three results worth stating out loud:
 py -m pip install -r requirements.txt
 ```
 
-Requires Python 3.10+. No GPU needed at 256 mixtures.
+Requires Python 3.10+. No GPU needed at 256 mixtures. On macOS/Linux,
+`bash setup.sh` installs the dependencies and runs the suite in one step.
+
+Verify a checkout is healthy — the suite needs no dataset, because the published
+score artifacts are committed:
+
+```bash
+py -m pytest -q                          # 28 tests
+py -m voiceauth.cli selftest             # score scale matches outputs/scores.npz
+```
+
+CI runs both on every push and pull request.
 
 ## Pipeline
 
@@ -265,14 +287,14 @@ microphone before trusting the rate for anything that matters.
 ## Layout
 
 ```
-voice_auth/
+gmm-ubm-speaker-verification/
 ├── src/voiceauth/          library
 │   ├── config.py           every tunable, resolved from the repo root
 │   ├── features.py         MFCC, deltas, VAD
 │   ├── gmm_ubm.py          EM, MAP adaptation, scoring
 │   └── dataset.py          parquet indexing with row-group cache
 ├── scripts/                pipeline entry points
-├── tests/                  12 checks, `py -m pytest tests/ -q`
+├── tests/                  unit + regression suite, `py -m pytest -q`
 ├── figures/                generated, not hand-drawn
 ├── docs/                   methodology notes
 ├── data/raw/               6.4 GB parquet — delete to reclaim space

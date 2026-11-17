@@ -1,0 +1,10 @@
+# Normalise line endings on commit; check out native endings on Windows.
+* text=auto
+
+# Shell scripts must stay LF or the shebang breaks on Unix.
+*.sh text eol=lf
+
+# Binary artifacts and regenerable outputs.
+*.npz binary
+*.pkl binary
+*.png binary
