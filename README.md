@@ -157,6 +157,15 @@ py -m voiceauth.cli selftest             # score scale matches outputs/scores.np
 
 CI runs both on every push and pull request.
 
+### Portability
+
+`models/ubm.pkl` and `models/speaker_split.pkl` were pickled on Windows and hold
+`WindowsPath` objects. `pytest` passes on Linux and macOS, but anything that
+loads `speaker_split.pkl` — including `selftest` — raises
+`NotImplementedError: cannot instantiate 'WindowsPath' on your system`. CI runs
+the suite on Ubuntu and the selftest on Windows to match. Elsewhere, regenerate
+the split from the dataset (`py scripts/train_ubm.py`).
+
 ## Pipeline
 
 ```bash
