@@ -151,7 +151,7 @@ Verify a checkout is healthy — the suite needs no dataset, because the publish
 score artifacts are committed:
 
 ```bash
-py -m pytest -q                          # 28 tests
+py -m pytest -q                          # full suite
 py -m voiceauth.cli selftest             # score scale matches outputs/scores.npz
 ```
 

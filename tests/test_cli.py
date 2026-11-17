@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -60,8 +61,20 @@ def test_calibration_has_tnorm_fields():
     assert "t_threshold" in obj
     assert 0.0 < obj["eer"] < 0.2
     assert obj["cohort_size"] >= 2
-    # the shipped cohort must exist for scoring to work
-    assert cli.COHORT_PATH.exists()
+
+
+def test_missing_cohort_explains_how_to_build_it():
+    """calibration.json ships; cohort_models.pkl is gitignored by design.
+
+    A fresh clone therefore has no cohort, and must fail with an instruction
+    rather than a traceback. Asserting `COHORT_PATH.exists()` here instead
+    would make the suite fail on every clean checkout.
+    """
+    if cli.COHORT_PATH.exists():
+        return
+    with pytest.raises(SystemExit) as exc:
+        cli.load_cohort_models()
+    assert "calibrate" in str(exc.value)
 
 
 def test_trial_t_score_ranks_the_right_speaker_first():
